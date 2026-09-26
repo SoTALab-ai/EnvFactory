@@ -9,6 +9,9 @@ from agents import Agent, Runner
 from src.gen import Gen
 from src.gen.env_gen import EnvGenConfig
 from src.gen.prompts import SchemaGen_System_Prompt, SchemaGen_User_Prompt, SchemaDesign_System_Prompt
+from src.utils.web_research_tools import read_webpage, search_web
+
+SCHEMA_RESEARCH_TOOLS = [search_web, read_webpage]
 
 
 class SchemaGen(Gen):
@@ -38,11 +41,13 @@ class SchemaGen(Gen):
             name="SchemaGen",
             instructions=SchemaGen_System_Prompt,
             model=schema_model,
+            tools=SCHEMA_RESEARCH_TOOLS,
         )
         self.schema_designer = Agent(
             name="SchemaDesign",
             instructions=SchemaDesign_System_Prompt,
-            model=schema_model,    
+            model=schema_model,
+            tools=SCHEMA_RESEARCH_TOOLS,
         )
     
 
@@ -138,6 +143,15 @@ class SchemaGen(Gen):
             for field in tool_required_fields:
                 if field not in tool:
                     raise ValueError(f"Tool at index {i} missing required field: {field}")
+
+        sources = schema.get('sources', [])
+        if not isinstance(sources, list):
+            raise ValueError("'sources' must be a list when provided")
+        for i, source in enumerate(sources):
+            if not isinstance(source, dict):
+                raise ValueError(f"Source at index {i} must be a dictionary")
+            if not isinstance(source.get('url'), str) or not source['url'].startswith(('http://', 'https://')):
+                raise ValueError(f"Source at index {i} must include an HTTP(S) URL")
 
         if output_path is None:
             metadata_dir = Path("envs/metadata")
