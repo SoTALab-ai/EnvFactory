@@ -1,6 +1,12 @@
 import json
 import os
 import re
+
+# Disable tracing before importing the Agents SDK. Otherwise the SDK may create
+# its exporter HTTP client during import, even though EnvFactory disables
+# tracing immediately afterwards.
+os.environ.setdefault("OPENAI_AGENTS_DISABLE_TRACING", "true")
+
 import aiofiles
 from abc import ABC, abstractmethod
 from uuid import uuid4

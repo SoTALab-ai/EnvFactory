@@ -86,10 +86,28 @@ SGLANG_MODEL=Qwen/Qwen3-30B-A3B-Thinking-2507
 Environment construction follows a **discovery-to-validation** pipeline:
 
 ```
-Schema Sketch  →  MCP Metadata  →  Executable Environment  →  Validation
+DiscoveryGen  →  Schema Sketch  →  MCP Metadata  →  Executable Environment  →  Validation
 ```
 
-**1. Discover** new schema sketches with [`mcp-sketch-discovery`](mcp-sketch-discovery/SKILL.md). The workflow scans existing sketches, searches for non-AI utility APIs, and drafts new candidates under [`envs/schema_sketch`](envs/schema_sketch).
+**1. Discover** one focused API environment with the `DiscoveryGen` agent. It
+searches and reads official documentation, then writes source-grounded research
+notes and a validated 3-5 tool schema sketch under `envs/schema_sketch/`:
+
+```bash
+python -m src.gen.discovery_gen \
+  "Feishu document API: search, read, and update documents"
+```
+
+Run the complete discovery-to-metadata or discovery-to-environment workflow:
+
+```bash
+python -m src.gen.discovery_gen "Feishu document API" --generate-metadata
+python -m src.gen.discovery_gen "Feishu document API" --generate-environment
+```
+
+The legacy [`mcp-sketch-discovery`](.agents/skills/mcp-sketch-discovery/SKILL.md)
+skill remains available for human-guided batch exploration. `DiscoveryGen` is
+the code-level workflow stage for a concrete environment goal.
 
 **2. Generate** standardized MCP metadata from a schema sketch:
 
@@ -97,6 +115,12 @@ Schema Sketch  →  MCP Metadata  →  Executable Environment  →  Validation
 python -m src.gen.mcp_schema_gen envs/schema_sketch/calendar_server.py \
   --output envs/metadata/Calendar_metadata.json
 ```
+
+`SchemaGen` runs as an agent with two research tools: `search_web` discovers
+official API documentation, and `read_webpage` extracts text from public pages.
+The generated metadata includes a top-level `sources` list for provenance.
+Web content is treated as untrusted reference data, and private or local network
+addresses are blocked by the page reader.
 
 > If `--output` is omitted, the metadata is saved to `envs/metadata/{class_name}_metadata.json`.
 

@@ -17,3 +17,5 @@ pandas
 pyarrow
 seaborn
 aiofiles
+ddgs
+socksio
