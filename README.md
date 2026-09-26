@@ -117,7 +117,11 @@ python -m src.gen.mcp_schema_gen envs/schema_sketch/calendar_server.py \
 ```
 
 `SchemaGen` runs as an agent with two research tools: `search_web` discovers
-official API documentation, and `read_webpage` extracts text from public pages.
+official API documentation, and `read_webpage` uses
+[`agent-browser`](https://github.com/vercel-labs/agent-browser) to obtain
+agent-readable Markdown or rendered page text. Install it with
+`npm install -g agent-browser && agent-browser install`. A bounded native HTTP
+reader remains available as a fallback when the CLI is unavailable.
 The generated metadata includes a top-level `sources` list for provenance.
 Web content is treated as untrusted reference data, and private or local network
 addresses are blocked by the page reader.

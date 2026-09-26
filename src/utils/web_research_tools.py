@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import os
 import re
+import shutil
 import socket
+import subprocess
 from html.parser import HTMLParser
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin, urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
+from uuid import uuid4
 
 from agents import function_tool
 from ddgs import DDGS
@@ -20,6 +24,7 @@ DEFAULT_MAX_PAGE_BYTES = 2_000_000
 DEFAULT_MAX_PAGE_CHARS = 20_000
 MAX_PAGE_CHARS = 50_000
 USER_AGENT = "EnvFactory-SchemaGen/1.0 (+https://github.com/SoTALab-ai/EnvFactory)"
+AGENT_BROWSER_ENV = "ENVFACTORY_AGENT_BROWSER_BIN"
 
 
 def _json_result(payload: dict[str, Any]) -> str:
@@ -220,13 +225,11 @@ def search_web_impl(query: str, max_results: int = 5) -> str:
     return _json_result({"query": query, "results": results})
 
 
-def read_webpage_impl(url: str, max_chars: int = DEFAULT_MAX_PAGE_CHARS) -> str:
-    """Read a public text page and return extracted content as JSON."""
-    max_chars = max(1_000, min(max_chars, MAX_PAGE_CHARS))
+def _read_webpage_native(url: str, max_chars: int) -> dict[str, Any]:
     try:
         final_url, content_type, body = _fetch_public_page(url)
     except (HTTPError, URLError, OSError, ValueError, LookupError) as exc:
-        return _json_result({"error": str(exc), "url": url})
+        return {"error": str(exc), "url": url, "backend": "native"}
 
     title, content = _extract_page_text(body, content_type)
     alternate_error = ""
@@ -251,9 +254,97 @@ def read_webpage_impl(url: str, max_chars: int = DEFAULT_MAX_PAGE_CHARS) -> str:
         "title": title,
         "content": content[:max_chars],
         "truncated": truncated,
+        "backend": "native",
     }
     if alternate_error:
         result["alternate_error"] = alternate_error
+    return result
+
+
+def _read_with_agent_browser(url: str, max_chars: int) -> dict[str, Any]:
+    _validate_public_url(url)
+    executable = os.environ.get(AGENT_BROWSER_ENV) or shutil.which("agent-browser")
+    if not executable:
+        raise RuntimeError("agent-browser executable is not installed")
+
+    hostname = urlparse(url).hostname
+    session = f"envfactory-schema-{os.getpid()}-{uuid4().hex[:8]}"
+    command = [
+        executable,
+        "--session",
+        session,
+        "read",
+        url,
+        "--json",
+        "--allowed-domains",
+        hostname,
+        "--content-boundaries",
+        "--max-output",
+        str(max_chars),
+        "--timeout",
+        "15000",
+    ]
+    try:
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError(f"agent-browser read failed: {exc}") from exc
+    finally:
+        try:
+            subprocess.run(
+                [executable, "--session", session, "close"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+
+    if completed.returncode != 0:
+        detail = completed.stderr.strip() or completed.stdout.strip()
+        raise RuntimeError(f"agent-browser read failed: {detail[-500:]}")
+    try:
+        payload = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("agent-browser returned invalid JSON") from exc
+    if not payload.get("success") or payload.get("error"):
+        raise RuntimeError(f"agent-browser read failed: {payload.get('error')}")
+
+    data = payload.get("data") or {}
+    content = data.get("content") or ""
+    if not isinstance(content, str) or not content.strip():
+        raise RuntimeError("agent-browser returned no readable content")
+    final_url = data.get("finalUrl") or data.get("url") or url
+    _validate_public_url(final_url)
+    title = ""
+    if content.startswith("# "):
+        title = content.splitlines()[0][2:].strip()
+    return {
+        "requested_url": url,
+        "url": final_url,
+        "title": title,
+        "content": content[:max_chars],
+        "truncated": bool(data.get("truncated")) or len(content) > max_chars,
+        "content_type": data.get("contentType", ""),
+        "source": data.get("source", ""),
+        "backend": "agent-browser",
+    }
+
+
+def read_webpage_impl(url: str, max_chars: int = DEFAULT_MAX_PAGE_CHARS) -> str:
+    """Read a public page with agent-browser, falling back to bounded HTTP."""
+    max_chars = max(1_000, min(max_chars, MAX_PAGE_CHARS))
+    try:
+        result = _read_with_agent_browser(url, max_chars)
+    except (RuntimeError, ValueError) as browser_exc:
+        result = _read_webpage_native(url, max_chars)
+        result["browser_error"] = str(browser_exc)
     return _json_result(result)
 
 

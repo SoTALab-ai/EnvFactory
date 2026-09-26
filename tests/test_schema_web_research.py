@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from src.gen.mcp_schema_gen import SCHEMA_RESEARCH_TOOLS, SchemaGen
@@ -9,6 +10,7 @@ from src.gen.prompts import SchemaDesign_System_Prompt, SchemaGen_System_Prompt
 from src.utils.web_research_tools import (
     _extract_page_text,
     _find_markdown_alternate,
+    _read_with_agent_browser,
     _validate_public_url,
     read_webpage_impl,
     search_web_impl,
@@ -68,6 +70,51 @@ class WebResearchToolTest(unittest.TestCase):
     def test_invalid_scheme_returns_error(self):
         result = json.loads(read_webpage_impl("file:///etc/passwd"))
         self.assertIn("error", result)
+
+    def test_agent_browser_reader_returns_structured_content(self):
+        payload = {
+            "success": True,
+            "error": None,
+            "data": {
+                "content": "# Official API\n\nRequest details",
+                "contentType": "text/markdown",
+                "finalUrl": "https://developer.example.com/reference",
+                "source": "accept-markdown",
+                "truncated": False,
+            },
+        }
+
+        def fake_run(command, **kwargs):
+            if command[-1] == "close":
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
+            return SimpleNamespace(returncode=0, stdout=json.dumps(payload), stderr="")
+
+        with (
+            patch("src.utils.web_research_tools._validate_public_url"),
+            patch("src.utils.web_research_tools.shutil.which", return_value="/usr/bin/agent-browser"),
+            patch("src.utils.web_research_tools.subprocess.run", side_effect=fake_run),
+        ):
+            result = _read_with_agent_browser("https://developer.example.com/reference", 5000)
+
+        self.assertEqual(result["backend"], "agent-browser")
+        self.assertEqual(result["title"], "Official API")
+        self.assertEqual(result["source"], "accept-markdown")
+
+    def test_native_reader_is_used_when_agent_browser_fails(self):
+        with (
+            patch(
+                "src.utils.web_research_tools._read_with_agent_browser",
+                side_effect=RuntimeError("browser unavailable"),
+            ),
+            patch(
+                "src.utils.web_research_tools._read_webpage_native",
+                return_value={"content": "fallback", "backend": "native"},
+            ),
+        ):
+            result = json.loads(read_webpage_impl("https://developer.example.com/reference"))
+
+        self.assertEqual(result["backend"], "native")
+        self.assertIn("browser unavailable", result["browser_error"])
 
 
 class SchemaResearchPromptTest(unittest.TestCase):
